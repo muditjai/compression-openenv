@@ -40,9 +40,10 @@ llm = [
 ]
 
 [project.scripts]
-# Server entry point - enables running via: uv run --project . server
-# or: python -m compressionenv.server.app
+# Server: uv run --project . server  or  python -m compressionenv.server.app
 server = "compressionenv.server.app:main"
+# Worker: uv run --project . worker  or  python -m compressionenv.worker
+worker = "compressionenv.worker:main"
 
 [tool.setuptools]
 include-package-data = true

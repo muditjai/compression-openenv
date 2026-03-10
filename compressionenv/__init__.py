@@ -13,4 +13,17 @@ __all__ = [
     "CompressionenvAction",
     "CompressionenvObservation",
     "CompressionenvEnv",
+    "ensure_essays",
 ]
+
+
+def ensure_essays():
+    """Ensure essays/ exists (extract from essays.tar.gz if needed). For remote Jupyter."""
+    import os
+
+    from .essays_utils import ensure_essays_extracted
+
+    path = ensure_essays_extracted()
+    n = len(os.listdir(path))
+    print(f"essays/ ready ({n} files)")
+    return path
