@@ -16,7 +16,7 @@ from .models import CompressionenvAction, CompressionenvObservation
 
 
 class CompressionenvEnv(
-    EnvClient[CompressionenvAction, CompressionenvObservation]
+    EnvClient[CompressionenvAction, CompressionenvObservation, State]
 ):
     """
     Client for the Compressionenv Environment.
@@ -29,17 +29,23 @@ class CompressionenvEnv(
         >>> # Connect to a running server
         >>> with CompressionenvEnv(base_url="http://localhost:8000") as client:
         ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
+        ...     print(result.observation.essay_id, len(result.observation.essay_text))
         ...
-        ...     result = client.step(CompressionenvAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
+        ...     result = client.step(CompressionenvAction(
+        ...         compression_code="def compress(t): return t.encode()",
+        ...         decompression_code="def decompress(b): return b.decode()",
+        ...     ))
+        ...     print(result.observation.valid, result.observation.compressed_size_bytes)
 
     Example with Docker:
         >>> # Automatically start container and connect
         >>> client = CompressionenvEnv.from_docker_image("compressionenv-env:latest")
         >>> try:
         ...     result = client.reset()
-        ...     result = client.step(CompressionenvAction(message="Test"))
+        ...     result = client.step(CompressionenvAction(
+        ...         compression_code="def compress(t): return t.encode()",
+        ...         decompression_code="def decompress(b): return b.decode()",
+        ...     ))
         ... finally:
         ...     client.close()
     """
@@ -55,7 +61,9 @@ class CompressionenvEnv(
             Dictionary representation suitable for JSON encoding
         """
         return {
-            "message": action.message,
+            "compression_code": action.compression_code,
+            "decompression_code": action.decompression_code,
+            "algo_name": action.algo_name,
         }
 
     def _parse_result(self, payload: Dict) -> StepResult[CompressionenvObservation]:
@@ -70,17 +78,26 @@ class CompressionenvEnv(
         """
         obs_data = payload.get("observation", {})
         observation = CompressionenvObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
-            done=payload.get("done", False),
-            reward=payload.get("reward"),
+            essay_id=obs_data.get("essay_id", ""),
+            essay_text=obs_data.get("essay_text", ""),
+            valid=obs_data.get("valid", False),
+            error=obs_data.get("error"),
+            compressed_size_bytes=obs_data.get("compressed_size_bytes"),
+            avg_prev_compressed_size_bytes=obs_data.get("avg_prev_compressed_size_bytes"),
+            improved_over_avg=obs_data.get("improved_over_avg"),
+            baselines_size_bytes=obs_data.get("baselines_size_bytes") or {},
+            best_baseline_size_bytes=obs_data.get("best_baseline_size_bytes"),
+            beat_any_baseline=obs_data.get("beat_any_baseline"),
+            beat_best_baseline=obs_data.get("beat_best_baseline"),
+            reward=obs_data.get("reward", payload.get("reward", 0.0)),
+            done=obs_data.get("done", payload.get("done", False)),
             metadata=obs_data.get("metadata", {}),
         )
 
         return StepResult(
             observation=observation,
-            reward=payload.get("reward"),
-            done=payload.get("done", False),
+            reward=payload.get("reward", observation.reward),
+            done=payload.get("done", observation.done),
         )
 
     def _parse_state(self, payload: Dict) -> State:
@@ -88,12 +105,10 @@ class CompressionenvEnv(
         Parse server response into State object.
 
         Args:
-            payload: JSON response from state request
+            payload: JSON response from state request (may include extra fields
+                e.g. essay_id, essay_text, baselines_size_bytes).
 
         Returns:
-            State object with episode_id and step_count
+            State object with episode_id, step_count, and any extra fields.
         """
-        return State(
-            episode_id=payload.get("episode_id"),
-            step_count=payload.get("step_count", 0),
-        )
+        return State(**payload)

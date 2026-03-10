@@ -33,6 +33,11 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.0.0",
 ]
+llm = [
+    "transformers>=4.40.0",
+    "torch>=2.0.0",
+    "accelerate>=0.25.0",
+]
 
 [project.scripts]
 # Server entry point - enables running via: uv run --project . server

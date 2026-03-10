@@ -15,6 +15,7 @@ compressed size relative to the agent's prior attempts and baseline compressors.
 import base64
 import json
 import os
+import re
 import random
 import subprocess
 import sys
@@ -30,7 +31,13 @@ import zlib
 from openenv.core.env_server.interfaces import Environment
 from openenv.core.env_server.types import State
 
-from models import CompressionenvAction, CompressionenvObservation
+from ..models import CompressionenvAction, CompressionenvObservation
+
+
+def _uses_forbidden_compression(compression_code: str, decompression_code: str) -> bool:
+    """True if code uses zlib, bz2, lzma, gzip - reward will be set to 0."""
+    combined = compression_code + "\n" + decompression_code
+    return bool(re.search(r"\b(zlib|bz2|lzma|gzip)\b", combined))
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,9 @@ class CompressionenvEnvironment(Environment):
         - If agent achieves smaller size than the best baseline: +20 reward.
     """
 
+    # Episode ends after this many steps.
+    MAX_STEPS: int = 20
+
     # Enable concurrent WebSocket sessions.
     # Set to True if your environment isolates state between instances.
     # When True, multiple WebSocket clients can connect simultaneously, each
@@ -82,6 +92,7 @@ class CompressionenvEnvironment(Environment):
         self._essay = self._pick_essay()
         self._successful_sizes = []
         self._baselines = self._compute_baselines(self._essay.text)
+        self._update_state()
 
         return CompressionenvObservation(
             essay_id=self._essay.essay_id,
@@ -161,7 +172,10 @@ class CompressionenvEnvironment(Environment):
                 elif beat_any_baseline:
                     reward += 10.0
 
-        return CompressionenvObservation(
+        if _uses_forbidden_compression(action.compression_code, action.decompression_code):
+            reward = 0.0
+
+        observation = CompressionenvObservation(
             essay_id=self._essay.essay_id,
             essay_text=essay_text,
             valid=valid,
@@ -173,7 +187,7 @@ class CompressionenvEnvironment(Environment):
             best_baseline_size_bytes=best_baseline,
             beat_any_baseline=beat_any_baseline,
             beat_best_baseline=beat_best_baseline,
-            done=False,
+            done=self._state.step_count >= self.MAX_STEPS,
             reward=reward,
             metadata={
                 "episode_id": self._state.episode_id,
@@ -182,23 +196,38 @@ class CompressionenvEnvironment(Environment):
                 "num_successful_attempts": len(self._successful_sizes),
             },
         )
+        self._update_state()
+        return observation
+
+    def _update_state(self) -> None:
+        """Sync internal state (State) from current episode and step data."""
+        if self._essay is not None:
+            self._state.essay_id = self._essay.essay_id  # type: ignore[attr-defined]
+            self._state.essay_text = self._essay.text  # type: ignore[attr-defined]
+            self._state.baselines_size_bytes = self._baselines  # type: ignore[attr-defined]
+            self._state.num_successful_attempts = len(self._successful_sizes)  # type: ignore[attr-defined]
+            if self._successful_sizes:
+                self._state.best_compressed_size_bytes = min(self._successful_sizes)  # type: ignore[attr-defined]
+                self._state.last_compressed_size_bytes = self._successful_sizes[-1]  # type: ignore[attr-defined]
+            else:
+                self._state.best_compressed_size_bytes = None  # type: ignore[attr-defined]
+                self._state.last_compressed_size_bytes = None  # type: ignore[attr-defined]
+            if self._baselines:
+                self._state.best_baseline_size_bytes = min(self._baselines.values())  # type: ignore[attr-defined]
+            else:
+                self._state.best_baseline_size_bytes = None  # type: ignore[attr-defined]
+        return None
 
     @property
     def state(self) -> State:
         """
-        Get the current environment state.
+        Get the current environment **state**.
 
-        Returns:
-            Current State with episode_id and step_count
+        In RL terms, the State is a (Markov) description of the underlying
+        environment that is at least as informative as any single Observation.
+        Here we include all information needed to reconstruct what any call to
+        `reset()` or `step()` would expose in an observation for this episode.
         """
-        # Store a bit of extra state; State allows extra fields.
-        if self._essay is not None:
-            self._state.essay_id = self._essay.essay_id  # type: ignore[attr-defined]
-            self._state.num_successful_attempts = len(self._successful_sizes)  # type: ignore[attr-defined]
-            if self._successful_sizes:
-                self._state.best_compressed_size_bytes = min(self._successful_sizes)  # type: ignore[attr-defined]
-            if self._baselines:
-                self._state.best_baseline_size_bytes = min(self._baselines.values())  # type: ignore[attr-defined]
         return self._state
 
     def _pick_essay(self) -> _Essay:
